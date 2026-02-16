@@ -24,6 +24,8 @@
     "worker:sms": "tsx src/workers/sms.ts",
     "worker:push": "tsx src/workers/push.ts",
     "worker:inapp": "tsx src/workers/in-app.ts",
+    "analytics": "tsx src/services/analytics.ts",
+    "monitor": "tsx src/scripts/monitor.ts",
     "test:publish": "tsx src/scripts/publish-test-event.ts",
     "prepare": "husky"
   },
