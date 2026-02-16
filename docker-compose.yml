@@ -14,7 +14,7 @@ services:
     networks:
       - notifications-network
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      test: ["CMD", "nc", "-z", "localhost", "4222"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -29,7 +29,7 @@ services:
       POSTGRES_PASSWORD: notifications_dev_password
       POSTGRES_DB: notifications
     ports:
-      - "5435:5432"
+      - "5437:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql

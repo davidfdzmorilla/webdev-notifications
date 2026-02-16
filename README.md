@@ -209,7 +209,7 @@ Create `.env.local`:
 
 ```env
 # Database
-DATABASE_URL=postgresql://notifications:notifications_dev_password@localhost:5435/notifications
+DATABASE_URL=postgresql://notifications:notifications_dev_password@localhost:5437/notifications
 
 # Redis
 REDIS_URL=redis://localhost:6380
