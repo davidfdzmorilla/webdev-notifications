@@ -20,6 +20,10 @@
     "ingestion": "tsx src/services/ingestion.ts",
     "preferences": "tsx src/services/preferences.ts",
     "router": "tsx src/services/router.ts",
+    "worker:email": "tsx src/workers/email.ts",
+    "worker:sms": "tsx src/workers/sms.ts",
+    "worker:push": "tsx src/workers/push.ts",
+    "worker:inapp": "tsx src/workers/in-app.ts",
     "test:publish": "tsx src/scripts/publish-test-event.ts",
     "prepare": "husky"
   },
