@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  # NATS JetStream (Message Broker)
+  nats:
+    image: nats:2.10-alpine
+    container_name: webdev-notifications-nats
+    command: ["-js", "-sd", "/data"]
+    ports:
+      - "4222:4222"   # Client connections
+      - "8222:8222"   # HTTP monitoring
+    volumes:
+      - nats-data:/data
+    networks:
+      - notifications-network
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8222/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # PostgreSQL (Preferences, Deliveries, Templates)
+  postgres:
+    image: postgres:16-alpine
+    container_name: webdev-notifications-postgres
+    environment:
+      POSTGRES_USER: notifications
+      POSTGRES_PASSWORD: notifications_dev_password
+      POSTGRES_DB: notifications
+    ports:
+      - "5435:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - notifications-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifications"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis (Deduplication, Rate Limiting, Cache)
+  redis:
+    image: redis:7-alpine
+    container_name: webdev-notifications-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - notifications-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Next.js App (API + WebSocket + Frontend)
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: webdev-notifications-app
+    depends_on:
+      nats:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://notifications:notifications_dev_password@postgres:5432/notifications
+      REDIS_URL: redis://redis:6379
+      NATS_URL: nats://nats:4222
+      PORT: 3010
+    ports:
+      - "3010:3010"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    networks:
+      - notifications-network
+    restart: unless-stopped
+
+volumes:
+  nats-data:
+  postgres-data:
+  redis-data:
+
+networks:
+  notifications-network:
+    driver: bridge
