@@ -33,6 +33,10 @@ export default [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        TextEncoder: 'readonly',
+        TextDecoder: 'readonly',
+        require: 'readonly',
+        module: 'readonly',
       },
     },
     plugins: {

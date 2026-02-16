@@ -12,12 +12,13 @@
     "format": "prettier --write .",
     "test": "echo \"Tests not yet implemented\" && exit 0",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "tsx src/lib/db/migrate.ts",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
-    "db:migrate": "tsx src/lib/db/migrate.ts",
     "db:seed": "tsx src/lib/db/seed.ts",
     "healthcheck": "tsx src/scripts/healthcheck.ts",
+    "ingestion": "tsx src/services/ingestion.ts",
+    "test:publish": "tsx src/scripts/publish-test-event.ts",
     "prepare": "husky"
   },
   "keywords": [
@@ -50,7 +51,7 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "typescript": "^5.9.3",
-    "zod": "^4.3.6"
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.4.1",
