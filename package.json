@@ -19,6 +19,7 @@
     "healthcheck": "tsx src/scripts/healthcheck.ts",
     "ingestion": "tsx src/services/ingestion.ts",
     "preferences": "tsx src/services/preferences.ts",
+    "router": "tsx src/services/router.ts",
     "test:publish": "tsx src/scripts/publish-test-event.ts",
     "prepare": "husky"
   },
