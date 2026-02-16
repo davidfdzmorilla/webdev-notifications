@@ -18,6 +18,7 @@
     "db:seed": "tsx src/lib/db/seed.ts",
     "healthcheck": "tsx src/scripts/healthcheck.ts",
     "ingestion": "tsx src/services/ingestion.ts",
+    "preferences": "tsx src/services/preferences.ts",
     "test:publish": "tsx src/scripts/publish-test-event.ts",
     "prepare": "husky"
   },
