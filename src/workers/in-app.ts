@@ -1,5 +1,6 @@
 import { JetStreamClient } from 'nats';
 import { getJetStream, getJetStreamManager } from '../lib/nats';
+import { getRedisClient } from '../lib/redis';
 import { db } from '../lib/db';
 import { notificationDeliveries } from '../lib/db/schema';
 import { nanoid } from 'nanoid';
@@ -24,6 +25,7 @@ interface RenderedNotification {
 
 export class InAppWorker {
   private js: JetStreamClient | null = null;
+  private redis = getRedisClient();
   private running = false;
 
   async start(): Promise<void> {
@@ -113,11 +115,27 @@ export class InAppWorker {
       },
     });
 
-    // TODO: Broadcast to WebSocket clients (future enhancement)
-    // For now, just store in DB
+    // Broadcast to WebSocket clients via Redis pub/sub
+    await this.redis.publish(
+      'ws:notifications',
+      JSON.stringify({
+        userId: notification.userId,
+        notification: {
+          id: deliveryId,
+          eventId: notification.eventId,
+          eventType: notification.eventType,
+          subject: notification.subject,
+          body: notification.body,
+          priority: notification.priority,
+          createdAt: notification.createdAt,
+        },
+      })
+    );
 
     const duration = Date.now() - startTime;
-    console.log(`✅ In-app notification ${notification.eventId} stored (${duration}ms)`);
+    console.log(
+      `✅ In-app notification ${notification.eventId} stored and broadcasted (${duration}ms)`
+    );
   }
 
   private async moveToDLQ(data: Uint8Array, error: unknown): Promise<void> {

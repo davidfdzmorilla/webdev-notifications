@@ -26,6 +26,7 @@
     "worker:inapp": "tsx src/workers/in-app.ts",
     "analytics": "tsx src/services/analytics.ts",
     "monitor": "tsx src/scripts/monitor.ts",
+    "websocket": "tsx src/services/websocket.ts",
     "test:publish": "tsx src/scripts/publish-test-event.ts",
     "prepare": "husky"
   },
