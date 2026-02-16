@@ -38,6 +38,9 @@ export default [
         require: 'readonly',
         module: 'readonly',
         URL: 'readonly',
+        fetch: 'readonly',
+        alert: 'readonly',
+        confirm: 'readonly',
       },
     },
     plugins: {
