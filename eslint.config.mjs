@@ -37,6 +37,7 @@ export default [
         TextDecoder: 'readonly',
         require: 'readonly',
         module: 'readonly',
+        URL: 'readonly',
       },
     },
     plugins: {

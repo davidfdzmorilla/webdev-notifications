@@ -49,6 +49,7 @@
     "@types/react-dom": "^19.2.3",
     "drizzle-orm": "^0.45.1",
     "ioredis": "^5.9.3",
+    "nanoid": "^5.1.6",
     "nats": "^2.29.3",
     "next": "^16.1.6",
     "nodemailer": "^8.0.1",
