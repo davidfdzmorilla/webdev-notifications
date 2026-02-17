@@ -1,237 +1,237 @@
-# Event-Driven Notification System
+# webdev-notifications
 
-A production-grade, scalable notification service with multi-channel delivery (email, SMS, push, in-app), user preferences, retry logic, and observability.
+> **Event-Driven Notification System** — Level 6 of the WebDev Progressive Roadmap
 
-**🌐 Live**: [https://notifications.davidfdzmorilla.dev](https://notifications.davidfdzmorilla.dev) _(Coming soon)_  
-**📦 Repo**: [github.com/davidfdzmorilla/webdev-notifications](https://github.com/davidfdzmorilla/webdev-notifications)
+[![Live Demo](https://img.shields.io/badge/demo-notifications.davidfdzmorilla.dev-blue)](https://notifications.davidfdzmorilla.dev)
+[![GitHub](https://img.shields.io/badge/github-webdev--notifications-black)](https://github.com/davidfdzmorilla/webdev-notifications)
+
+## 🚀 Live
+
+**[https://notifications.davidfdzmorilla.dev](https://notifications.davidfdzmorilla.dev)**
+
+## Overview
+
+A production-grade, event-driven notification system built with modern TypeScript stack. Supports multi-channel delivery (Email, SMS, Push, In-App) through NATS JetStream with full observability, retry logic, circuit breakers, and real-time WebSocket delivery.
 
 ## Tech Stack
 
-- **Framework**: Next.js 15 (App Router)
-- **Language**: TypeScript (strict mode)
-- **Styling**: Tailwind CSS 4
-- **Event Streaming**: NATS JetStream
-- **Database**: PostgreSQL 16 (Drizzle ORM)
-- **Cache**: Redis 7 (deduplication, rate limiting)
-- **Real-time**: Socket.io (WebSocket)
-- **Delivery Channels**: Email (Nodemailer), SMS (Twilio mock), Push (FCM mock), In-App
-- **Infrastructure**: Docker Compose, Nginx, Cloudflare
-
-## Features
-
-- **Multi-Channel Delivery**: Email, SMS, Push notifications, In-app notifications
-- **Event-Driven Architecture**: NATS JetStream for reliable message streaming
-- **User Preferences**: Per-channel, per-event-type preferences with quiet hours
-- **Retry Logic**: Exponential backoff with circuit breaker pattern
-- **Deduplication**: Idempotent event processing with Redis cache
-- **Rate Limiting**: Per-user, per-channel sliding window rate limiting
-- **Real-time WebSocket**: Live in-app notifications via Socket.io
-- **Delivery Tracking**: Complete audit log with analytics
-- **Template Engine**: Dynamic notification templates with variable substitution
-- **Observability**: Structured logging, health checks, metrics (Prometheus-ready)
+| Technology                   | Purpose                               |
+| ---------------------------- | ------------------------------------- |
+| **Next.js 15**               | API routes, frontend, SSR             |
+| **TypeScript (strict)**      | Type-safe codebase                    |
+| **NATS JetStream**           | Message broker, event streaming       |
+| **PostgreSQL**               | Preferences, deliveries, templates    |
+| **Redis**                    | Deduplication, rate limiting, pub/sub |
+| **WebSocket (Socket.IO)**    | Real-time notification delivery       |
+| **Prometheus / prom-client** | Metrics & observability               |
+| **Docker Compose**           | Container orchestration               |
+| **Cloudflare**               | DNS, CDN, SSL termination             |
+| **Nginx**                    | Reverse proxy                         |
 
 ## Architecture
 
 ```
-┌─────────────┐
-│Event Sources│ → NATS JetStream → Ingestion → Preferences → Router
-└─────────────┘                                                  │
-                                                    ┌────────────┼────────────┐
-                                                    ▼            ▼            ▼
-                                                 Email        SMS          Push
-                                                 Worker       Worker       Worker
-                                                    │            │            │
-                                                    └────────────┴────────────┘
-                                                              ▼
-                                                     Delivery Tracker
-                                                     (PostgreSQL + Redis)
+[Client] → [Next.js API] → [NATS JetStream]
+                                   ↓
+                         [Ingestion Service]
+                          (validate, dedup, enrich)
+                                   ↓
+                         [Preference Engine]
+                          (check user prefs)
+                                   ↓
+                         [Channel Router]
+                          (render templates)
+                               ↙↓↘
+                   [Email] [SMS] [Push] [In-App]
+                     Worker  Worker  Worker  Worker
+                                              ↓
+                                        [WebSocket]
+                                      (real-time delivery)
 ```
 
-For detailed architecture and design decisions, see [docs/DESIGN.md](docs/DESIGN.md).
+## Key Features
 
-## Getting Started
+- ✅ **Multi-channel delivery**: Email, SMS, Push notifications, In-App
+- ✅ **NATS JetStream**: Persistent messaging with at-least-once delivery
+- ✅ **Deduplication**: Redis-based idempotency (1h TTL)
+- ✅ **Retry logic**: Exponential backoff (1s, 5s, 15s)
+- ✅ **Circuit breakers**: Auto-pause on consecutive failures
+- ✅ **Dead Letter Queue**: Failed messages tracked and stored
+- ✅ **Template engine**: Variable substitution per channel/event type
+- ✅ **Preference engine**: User-defined channel/quiet-hours preferences
+- ✅ **Real-time WebSocket**: Socket.IO with Redis pub/sub for distributed setup
+- ✅ **Analytics**: Delivery tracking, stats API
+- ✅ **Observability**: Prometheus metrics, structured JSON logging, health checks
+- ✅ **Admin UI**: Template management dashboard
+- ✅ **TypeScript strict**: Full type safety throughout
 
-### Prerequisites
+## Milestones Completed
 
-- Node.js 22+
-- pnpm
-- Docker & Docker Compose
-
-### Development
-
-```bash
-# Install dependencies
-pnpm install
-
-# Start infrastructure (NATS, PostgreSQL, Redis)
-make up
-
-# Run database migrations
-pnpm db:push
-
-# Start development server
-pnpm dev
-```
-
-The app will be available at http://localhost:3010.
-
-### Production (Docker)
-
-```bash
-# Build and start all services
-docker compose up -d
-
-# View logs
-make logs
-```
-
-## Project Structure
-
-```
-src/
-├── app/                 # Next.js App Router pages
-│   ├── api/             # REST API routes
-│   │   ├── events/      # Event submission
-│   │   ├── preferences/ # User preferences
-│   │   ├── deliveries/  # Delivery tracking
-│   │   └── admin/       # Admin templates
-│   ├── layout.tsx       # Root layout
-│   └── page.tsx         # Homepage
-├── lib/                 # Core libraries
-│   ├── db/              # Database (Drizzle ORM)
-│   ├── nats/            # NATS client
-│   ├── redis/           # Redis client
-│   └── socket/          # Socket.io server
-├── services/            # Background services
-│   ├── ingestion.ts     # Event ingestion service
-│   ├── preferences.ts   # Preference engine
-│   ├── router.ts        # Channel router
-│   └── workers/         # Delivery workers
-│       ├── email.ts
-│       ├── sms.ts
-│       ├── push.ts
-│       └── inapp.ts
-├── types/               # TypeScript types
-└── utils/               # Utility functions
-```
-
-## Testing
-
-```bash
-# Run all tests
-pnpm test
-
-# Run linter
-pnpm lint
-
-# Run formatter
-pnpm format
-```
-
-## Deployment
-
-1. Build Docker image:
-
-   ```bash
-   docker build -t webdev-notifications:latest .
-   ```
-
-2. Deploy with Docker Compose:
-
-   ```bash
-   docker compose -f docker-compose.prod.yml up -d
-   ```
-
-3. Configure Cloudflare DNS:
-
-   ```bash
-   # Create A record for notifications.davidfdzmorilla.dev
-   ```
-
-4. Verify at https://notifications.davidfdzmorilla.dev
-
-## Documentation
-
-- [Design Document](docs/DESIGN.md) - Architecture, data model, API design
-- [Roadmap](docs/ROADMAP.md) - Milestones and implementation plan
-- [Verification Report](docs/VERIFICATION.md) - Deployment verification _(Coming soon)_
+- **M1–M3**: Project setup, Docker infrastructure, DB schema
+- **M4**: NATS JetStream + ingestion service
+- **M5**: Preference engine (user channel preferences, quiet hours)
+- **M6**: Channel router with template rendering
+- **M7**: Email worker with retry/circuit breaker
+- **M8**: SMS + Push workers
+- **M9**: In-App worker + WebSocket real-time delivery
+- **M10**: Analytics service + delivery tracking API
+- **M11**: Admin template management UI
+- **M12**: Testing (unit tests, integration)
+- **M13**: Observability (Prometheus metrics, structured logging, health checks)
+- **M14**: Production deployment to notifications.davidfdzmorilla.dev
 
 ## API Reference
 
-### Event Submission
+### Events
 
 ```bash
 POST /api/events
-Content-Type: application/json
+X-Api-Key: your_key
 
 {
-  "eventId": "evt_123",
-  "eventType": "account",
-  "userId": "user_123",
-  "channels": ["email", "push"],
+  "eventType": "user.signup",
+  "userId": "user_id",
+  "channels": ["email", "in_app"],
   "priority": "high",
-  "data": {
-    "userName": "John Doe",
-    "actionUrl": "https://example.com/verify"
-  }
+  "data": { "userName": "Alice", "email": "alice@example.com" }
 }
 ```
 
-### Preferences
+### Health Check
 
 ```bash
-# Get user preferences
-GET /api/preferences
+GET /api/health
+# Returns: { status, services: {postgres, redis, nats}, version, uptime }
+```
 
-# Update preference
-PATCH /api/preferences/:id
-{
-  "enabled": false
-}
+### Prometheus Metrics
+
+```bash
+GET /api/metrics
+# Returns: Prometheus text format metrics
 ```
 
 ### Deliveries
 
 ```bash
-# List user deliveries
-GET /api/deliveries
-
-# Get delivery details
-GET /api/deliveries/:id
-
-# Get analytics
-GET /api/deliveries/stats
+GET /api/deliveries              # List deliveries
+GET /api/deliveries/stats        # Delivery statistics
+GET /api/deliveries/:id          # Single delivery
 ```
 
-## Environment Variables
+### Preferences
 
-Create `.env.local`:
+```bash
+GET  /api/preferences?userId=X   # Get user preferences
+POST /api/preferences             # Create preference
+PATCH /api/preferences/:id        # Update preference
+```
+
+### Templates (Admin)
+
+```bash
+GET    /api/admin/templates                    # List templates
+POST   /api/admin/templates                    # Create template
+PATCH  /api/admin/templates/:id               # Update template
+DELETE /api/admin/templates/:id               # Delete template
+```
+
+## Running Locally
+
+### Prerequisites
+
+- Docker + Docker Compose
+- Node.js 22+
+- pnpm
+
+### Development
+
+```bash
+git clone https://github.com/davidfdzmorilla/webdev-notifications
+cd webdev-notifications
+
+# Start infrastructure (NATS, PostgreSQL, Redis)
+docker compose up -d nats postgres redis
+
+# Install dependencies
+pnpm install
+
+# Run migrations and seed
+pnpm db:push
+pnpm db:seed
+
+# Start development server
+pnpm dev
+
+# Start services (in separate terminals)
+pnpm ingestion
+pnpm router
+pnpm worker:email
+pnpm worker:sms
+pnpm worker:push
+pnpm worker:inapp
+pnpm websocket
+```
+
+### Production
+
+```bash
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Environment Variables
 
 ```env
-# Database
-DATABASE_URL=postgresql://notifications:notifications_dev_password@localhost:5437/notifications
-
-# Redis
+DATABASE_URL=postgresql://notifications:password@localhost:5437/notifications
 REDIS_URL=redis://localhost:6380
-
-# NATS
 NATS_URL=nats://localhost:4222
-
-# External APIs (optional for MVP)
-SENDGRID_API_KEY=your_key_here
-TWILIO_ACCOUNT_SID=your_sid_here
-TWILIO_AUTH_TOKEN=your_token_here
-FCM_SERVER_KEY=your_key_here
-
-# App
 PORT=3010
-NODE_ENV=development
+API_KEY=your_api_key
+ADMIN_KEY=your_admin_key
+LOG_LEVEL=info
+```
+
+## Observability
+
+### Health Check
+
+```
+GET /api/health
+→ { status: 'ok'|'degraded', services: {postgres, redis, nats}, uptime }
+```
+
+### Prometheus Metrics
+
+```
+GET /api/metrics
+→ events_received_total, events_processed_total, events_failed_total
+→ deliveries_total{channel, status}
+→ delivery_duration_seconds{channel}
+→ active_websocket_connections
+→ Node.js default metrics (memory, CPU, GC)
+```
+
+### Structured Logging
+
+```json
+{
+  "timestamp": "2026-02-17T04:17:59.000Z",
+  "level": "info",
+  "service": "ingestion-service",
+  "message": "Received event",
+  "eventId": "abc123",
+  "eventType": "user.signup"
+}
+```
+
+## Testing
+
+```bash
+pnpm test              # Run unit tests
+pnpm test:coverage     # With coverage
+pnpm test:publish      # Publish test event to NATS
 ```
 
 ## License
 
-MIT
-
----
-
-**Built with ❤️ by WebDev Agent** | [Level 6.2 - Advanced Cloud-Native & Real-Time Systems]
+MIT — David Fernández Morilla
