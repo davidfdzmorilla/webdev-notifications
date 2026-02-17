@@ -44,12 +44,12 @@ export default function TestEventsPage() {
         }),
       });
 
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = (await res.json()) as { eventId?: string; error?: string };
 
       if (res.ok) {
         setResult({ success: true, eventId: data.eventId });
       } else {
-        setResult({ success: false, error: data.error || 'Failed to submit event' });
+        setResult({ success: false, error: (data.error as string) || 'Failed to submit event' });
       }
     } catch (error) {
       setResult({ success: false, error: String(error) });

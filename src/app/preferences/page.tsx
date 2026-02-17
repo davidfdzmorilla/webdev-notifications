@@ -25,7 +25,7 @@ export default function PreferencesPage() {
     try {
       setLoading(true);
       const res = await fetch(`/api/preferences?userId=${userId}`);
-      const data = (await res.json()) as Record<string, unknown>;
+      const data = (await res.json()) as { preferences?: Preference[] };
       setPreferences(data.preferences || []);
     } catch (error) {
       console.error('Error loading preferences:', error);
