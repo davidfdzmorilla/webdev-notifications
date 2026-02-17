@@ -24,7 +24,7 @@ services:
     container_name: webdev-notifications-postgres
     environment:
       POSTGRES_USER: notifications
-      POSTGRES_PASSWORD: notifications_prod_password
+      POSTGRES_PASSWORD: notifications_dev_password
       POSTGRES_DB: notifications
     ports:
       - "5437:5432"
@@ -71,13 +71,13 @@ services:
         condition: service_healthy
     environment:
       NODE_ENV: production
-      DATABASE_URL: postgresql://notifications:notifications_prod_password@postgres:5432/notifications
+      DATABASE_URL: postgresql://notifications:notifications_dev_password@postgres:5432/notifications
       REDIS_URL: redis://redis:6379
       NATS_URL: nats://nats:4222
       PORT: 3010
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
-      - "3010:3010"
+      - "3012:3010"
     networks:
       - notifications-network
     restart: unless-stopped
