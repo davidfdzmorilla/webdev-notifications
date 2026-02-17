@@ -1,8 +1,12 @@
-import { JetStreamClient } from 'nats';
+import { JetStreamClient, AckPolicy } from 'nats';
 import { getJetStream, getJetStreamManager } from '../lib/nats';
 import { db } from '../lib/db';
 import { notificationDeliveries } from '../lib/db/schema';
 import { nanoid } from 'nanoid';
+import { createLogger } from '../lib/logger';
+import { deliveriesTotal, deliveryDurationSeconds } from '../lib/metrics';
+
+const logger = createLogger('worker:push');
 
 const DELIVERY_SUBJECT = 'notifications.delivery.push';
 const DLQ_SUBJECT = 'notifications.dlq';
@@ -30,7 +34,7 @@ export class PushWorker {
   private circuitOpen = false;
 
   async start(): Promise<void> {
-    console.log('🚀 Starting Push Worker...');
+    logger.info('Starting Push Worker');
 
     this.js = await getJetStream();
     const jsm = await getJetStreamManager();
@@ -38,34 +42,36 @@ export class PushWorker {
     const consumerName = 'push-worker-consumer';
     try {
       await jsm.consumers.info('notifications', consumerName);
-      console.log(`✅ Consumer "${consumerName}" exists`);
+      logger.info('Consumer exists', { consumerName });
     } catch {
-      console.log(`Creating consumer "${consumerName}"...`);
+      logger.info('Creating consumer', { consumerName });
       await jsm.consumers.add('notifications', {
         durable_name: consumerName,
-        ack_policy: 'explicit',
+        ack_policy: AckPolicy.Explicit,
         filter_subject: DELIVERY_SUBJECT,
         max_deliver: MAX_RETRIES,
       });
-      console.log(`✅ Consumer "${consumerName}" created`);
+      logger.info('Consumer created', { consumerName });
     }
 
     const consumer = await this.js.consumers.get('notifications', consumerName);
     this.running = true;
 
-    console.log(`✅ Subscribed to ${DELIVERY_SUBJECT}`);
-    console.log('🔔 Delivering push notifications...');
+    logger.info('Subscribed to delivery subject', { subject: DELIVERY_SUBJECT });
+    logger.info('Delivering push notifications');
 
     while (this.running) {
       if (this.consecutiveFailures >= 5) {
         if (!this.circuitOpen) {
-          console.warn('⚠️  Circuit breaker OPEN - pausing push delivery');
+          logger.warn('Circuit breaker OPEN - pausing push delivery', {
+            consecutiveFailures: this.consecutiveFailures,
+          });
           this.circuitOpen = true;
         }
         await this.sleep(10000);
         this.consecutiveFailures = 0;
         this.circuitOpen = false;
-        console.log('🔄 Circuit breaker CLOSED - resuming');
+        logger.info('Circuit breaker CLOSED - resuming');
       }
 
       try {
@@ -75,7 +81,7 @@ export class PushWorker {
           try {
             if (deliveryAttempt > 0) {
               const delay = RETRY_DELAYS[Math.min(deliveryAttempt - 1, RETRY_DELAYS.length - 1)];
-              console.log(`⏳ Retry delay: ${delay}ms`);
+              logger.debug('Retry backoff', { delayMs: delay });
               await this.sleep(delay);
             }
 
@@ -84,9 +90,11 @@ export class PushWorker {
             this.consecutiveFailures = 0;
           } catch (error) {
             this.consecutiveFailures++;
-            console.error('❌ Push delivery failed:', error);
+            logger.error('Push delivery failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
             if (deliveryAttempt + 1 >= MAX_RETRIES) {
-              console.error(`⚠️  Max retries reached, moving to DLQ`);
+              logger.warn('Max retries reached, moving to DLQ');
               await this.moveToDLQ(msg.data, error);
               msg.ack();
             } else {
@@ -98,13 +106,15 @@ export class PushWorker {
         if (error instanceof Error && error.message.includes('timeout')) {
           continue;
         }
-        console.error('❌ Error fetching messages:', error);
+        logger.error('Error fetching messages', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
 
   async stop(): Promise<void> {
-    console.log('🛑 Stopping Push Worker...');
+    logger.info('Stopping Push Worker');
     this.running = false;
   }
 
@@ -113,7 +123,12 @@ export class PushWorker {
     const notification: RenderedNotification = JSON.parse(new TextDecoder().decode(data));
 
     const tokenCount = notification.userPushTokens?.length || 0;
-    console.log(`🔔 Sending push to ${tokenCount} device(s) (attempt ${attempt}, seq: ${seq})`);
+    logger.info('Sending push notification', {
+      tokenCount,
+      attempt,
+      seq,
+      eventId: notification.eventId,
+    });
 
     await this.sendPush(notification);
 
@@ -133,8 +148,14 @@ export class PushWorker {
       },
     });
 
-    const duration = Date.now() - startTime;
-    console.log(`✅ Push sent to ${tokenCount} device(s) (${duration}ms)`);
+    const durationMs = Date.now() - startTime;
+    deliveriesTotal.inc({ channel: 'push', status: 'delivered' });
+    deliveryDurationSeconds.observe({ channel: 'push' }, durationMs / 1000);
+    logger.info('Push sent successfully', {
+      tokenCount,
+      durationMs,
+      eventId: notification.eventId,
+    });
   }
 
   private async sendPush(notification: RenderedNotification): Promise<void> {
@@ -150,9 +171,11 @@ export class PushWorker {
       throw new Error('FCM API error: Invalid registration token');
     }
 
-    console.log(`  → Devices: ${notification.userPushTokens.length}`);
-    console.log(`  → Title: ${notification.subject || '(no title)'}`);
-    console.log(`  → Body: ${notification.body.substring(0, 50)}...`);
+    logger.debug('Push payload', {
+      devices: notification.userPushTokens.length,
+      title: notification.subject,
+      bodyPreview: notification.body.substring(0, 50),
+    });
   }
 
   private async moveToDLQ(data: Uint8Array, error: unknown): Promise<void> {
@@ -168,7 +191,8 @@ export class PushWorker {
     };
 
     await this.js.publish(DLQ_SUBJECT, new TextEncoder().encode(JSON.stringify(dlqPayload)));
-    console.log(`📮 Moved event ${notification.eventId} to DLQ`);
+    deliveriesTotal.inc({ channel: 'push', status: 'failed' });
+    logger.warn('Event moved to DLQ', { eventId: notification.eventId });
 
     const deliveryId = nanoid();
     await db.insert(notificationDeliveries).values({
@@ -206,7 +230,7 @@ if (require.main === module) {
   });
 
   worker.start().catch((err) => {
-    console.error('❌ Push worker failed:', err);
+    logger.error('Push worker failed', { error: err instanceof Error ? err.message : String(err) });
     process.exit(1);
   });
 }

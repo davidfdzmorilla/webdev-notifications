@@ -32,7 +32,7 @@ export default function NotificationsPage() {
     try {
       setLoading(true);
       const res = await fetch(`/api/deliveries?userId=${userId}&limit=50`);
-      const data = await res.json();
+      const data = (await res.json()) as Record<string, unknown>;
       setDeliveries(data.deliveries || []);
     } catch (error) {
       console.error('Error loading deliveries:', error);

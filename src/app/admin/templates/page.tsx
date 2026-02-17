@@ -34,7 +34,7 @@ export default function AdminTemplatesPage() {
       const res = await fetch('/api/admin/templates', {
         headers: { 'X-Admin-Key': adminKey },
       });
-      const data = await res.json();
+      const data = (await res.json()) as Record<string, unknown>;
       setTemplates(data.templates || []);
     } catch (error) {
       console.error('Error loading templates:', error);

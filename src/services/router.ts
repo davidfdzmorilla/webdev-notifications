@@ -1,8 +1,12 @@
-import { JetStreamClient } from 'nats';
+import { JetStreamClient, AckPolicy } from 'nats';
 import { getJetStream, getJetStreamManager } from '../lib/nats';
 import { db } from '../lib/db';
 import { notificationTemplates } from '../lib/db/schema';
 import { eq, and } from 'drizzle-orm';
+import { createLogger } from '../lib/logger';
+import { eventsProcessedTotal, eventsFailedTotal } from '../lib/metrics';
+
+const logger = createLogger('channel-router');
 
 const ROUTED_SUBJECTS = [
   'notifications.routed.email',
@@ -40,7 +44,7 @@ export class ChannelRouter {
   private running = false;
 
   async start(): Promise<void> {
-    console.log('🚀 Starting Channel Router...');
+    logger.info('Starting Channel Router');
 
     this.js = await getJetStream();
     const jsm = await getJetStreamManager();
@@ -52,20 +56,20 @@ export class ChannelRouter {
 
       try {
         await jsm.consumers.info('notifications', consumerName);
-        console.log(`✅ Consumer "${consumerName}" exists`);
+        logger.info('Consumer exists', { consumerName });
       } catch {
-        console.log(`Creating consumer "${consumerName}"...`);
+        logger.info('Creating consumer', { consumerName });
         await jsm.consumers.add('notifications', {
           durable_name: consumerName,
-          ack_policy: 'explicit',
+          ack_policy: AckPolicy.Explicit,
           filter_subject: subject,
         });
-        console.log(`✅ Consumer "${consumerName}" created`);
+        logger.info('Consumer created', { consumerName });
       }
     }
 
     this.running = true;
-    console.log('🎧 Routing and rendering notifications...');
+    logger.info('Routing and rendering notifications');
 
     // Process each channel in parallel
     const processors = ROUTED_SUBJECTS.map((subject) => this.processChannel(subject));
@@ -73,7 +77,7 @@ export class ChannelRouter {
   }
 
   async stop(): Promise<void> {
-    console.log('🛑 Stopping Channel Router...');
+    logger.info('Stopping Channel Router');
     this.running = false;
   }
 
@@ -86,6 +90,7 @@ export class ChannelRouter {
     }
 
     const consumer = await this.js.consumers.get('notifications', consumerName);
+    const channelLogger = logger.child(channel);
 
     while (this.running) {
       try {
@@ -95,7 +100,11 @@ export class ChannelRouter {
             await this.processEvent(msg.data, channel, msg.seq);
             msg.ack();
           } catch (error) {
-            console.error(`❌ Error processing ${channel} event:`, error);
+            channelLogger.error('Error processing event', {
+              seq: msg.seq,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            eventsFailedTotal.inc({ event_type: 'unknown', reason: 'routing' });
             msg.nak();
           }
         }
@@ -103,7 +112,9 @@ export class ChannelRouter {
         if (error instanceof Error && error.message.includes('timeout')) {
           continue;
         }
-        console.error(`❌ Error fetching ${channel} messages:`, error);
+        channelLogger.error('Error fetching messages', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
@@ -111,13 +122,21 @@ export class ChannelRouter {
   private async processEvent(data: Uint8Array, channel: string, seq: number): Promise<void> {
     const startTime = Date.now();
     const event: EnrichedEvent = JSON.parse(new TextDecoder().decode(data));
+    const channelLogger = logger.child(channel);
 
-    console.log(`📩 Routing ${channel} notification for event ${event.eventId} (seq: ${seq})`);
+    channelLogger.info('Routing notification', {
+      eventId: event.eventId,
+      seq,
+      eventType: event.eventType,
+    });
 
     // Fetch template
     const template = await this.fetchTemplate(channel, event.eventType);
     if (!template) {
-      console.warn(`⚠️  No template found for ${channel}/${event.eventType}, using fallback`);
+      channelLogger.warn('No template found, using fallback', {
+        channel,
+        eventType: event.eventType,
+      });
       // Use fallback template
       await this.publishRendered(channel, {
         ...event,
@@ -142,7 +161,11 @@ export class ChannelRouter {
     });
 
     const duration = Date.now() - startTime;
-    console.log(`✅ Routed ${channel} notification ${event.eventId} in ${duration}ms`);
+    eventsProcessedTotal.inc({ event_type: event.eventType });
+    channelLogger.info('Notification routed', {
+      eventId: event.eventId,
+      durationMs: duration,
+    });
   }
 
   private async fetchTemplate(
@@ -175,7 +198,6 @@ export class ChannelRouter {
     template: { subject?: string; body: string; variables: string[] },
     event: EnrichedEvent
   ): { subject?: string; body: string } {
-    // Simple variable substitution: {{variableName}} → event.data[variableName]
     const context = {
       ...event.data,
       userName: event.data.userName || event.userEmail?.split('@')[0] || 'User',
@@ -185,14 +207,12 @@ export class ChannelRouter {
     let renderedBody = template.body;
     let renderedSubject = template.subject;
 
-    // Replace variables in body
     for (const variable of template.variables) {
       const value = context[variable as keyof typeof context];
       const placeholder = new RegExp(`\\{\\{${variable}\\}\\}`, 'g');
       renderedBody = renderedBody.replace(placeholder, String(value || ''));
     }
 
-    // Replace variables in subject
     if (renderedSubject) {
       for (const variable of template.variables) {
         const value = context[variable as keyof typeof context];
@@ -215,13 +235,14 @@ export class ChannelRouter {
       throw new Error('JetStream not initialized');
     }
 
-    // Publish to delivery subject for workers
     const subject = `notifications.delivery.${channel}`;
     const data = new TextEncoder().encode(JSON.stringify(notification));
     await this.js.publish(subject, data);
-    console.log(
-      `📤 Published rendered ${channel} notification ${notification.eventId} to ${subject}`
-    );
+    logger.debug('Published rendered notification', {
+      channel,
+      eventId: notification.eventId,
+      subject,
+    });
   }
 }
 
@@ -240,7 +261,9 @@ if (require.main === module) {
   });
 
   router.start().catch((err) => {
-    console.error('❌ Channel router failed:', err);
+    logger.error('Channel router failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
   });
 }

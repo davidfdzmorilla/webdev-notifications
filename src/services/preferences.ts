@@ -1,4 +1,4 @@
-import { JetStreamClient } from 'nats';
+import { JetStreamClient, AckPolicy } from 'nats';
 import { getJetStream, getJetStreamManager } from '../lib/nats';
 import { getRedisClient } from '../lib/redis';
 import { db } from '../lib/db';
@@ -46,7 +46,7 @@ export class PreferenceEngine {
       console.log('Creating consumer "preferences-consumer"...');
       await jsm.consumers.add('notifications', {
         durable_name: 'preferences-consumer',
-        ack_policy: 'explicit',
+        ack_policy: AckPolicy.Explicit,
         filter_subject: ENRICHED_SUBJECT,
       });
       console.log('✅ Consumer "preferences-consumer" created');

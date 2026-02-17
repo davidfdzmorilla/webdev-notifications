@@ -1,9 +1,13 @@
-import { JetStreamClient } from 'nats';
+import { JetStreamClient, AckPolicy } from 'nats';
 import { getJetStream, getJetStreamManager } from '../lib/nats';
 import { getRedisClient } from '../lib/redis';
 import { db } from '../lib/db';
 import { notificationDeliveries } from '../lib/db/schema';
 import { nanoid } from 'nanoid';
+import { createLogger } from '../lib/logger';
+import { deliveriesTotal, deliveryDurationSeconds } from '../lib/metrics';
+
+const logger = createLogger('worker:in-app');
 
 const DELIVERY_SUBJECT = 'notifications.delivery.in_app';
 const DLQ_SUBJECT = 'notifications.dlq';
@@ -29,7 +33,7 @@ export class InAppWorker {
   private running = false;
 
   async start(): Promise<void> {
-    console.log('🚀 Starting In-App Worker...');
+    logger.info('Starting In-App Worker');
 
     this.js = await getJetStream();
     const jsm = await getJetStreamManager();
@@ -38,23 +42,23 @@ export class InAppWorker {
     const consumerName = 'inapp-worker-consumer';
     try {
       await jsm.consumers.info('notifications', consumerName);
-      console.log(`✅ Consumer "${consumerName}" exists`);
+      logger.info('Consumer exists', { consumerName });
     } catch {
-      console.log(`Creating consumer "${consumerName}"...`);
+      logger.info('Creating consumer', { consumerName });
       await jsm.consumers.add('notifications', {
         durable_name: consumerName,
-        ack_policy: 'explicit',
+        ack_policy: AckPolicy.Explicit,
         filter_subject: DELIVERY_SUBJECT,
         max_deliver: MAX_RETRIES,
       });
-      console.log(`✅ Consumer "${consumerName}" created`);
+      logger.info('Consumer created', { consumerName });
     }
 
     const consumer = await this.js.consumers.get('notifications', consumerName);
     this.running = true;
 
-    console.log(`✅ Subscribed to ${DELIVERY_SUBJECT}`);
-    console.log('📱 Delivering in-app notifications...');
+    logger.info('Subscribed to delivery subject', { subject: DELIVERY_SUBJECT });
+    logger.info('Delivering in-app notifications');
 
     while (this.running) {
       try {
@@ -65,9 +69,11 @@ export class InAppWorker {
             await this.deliver(msg.data, deliveryAttempt + 1, msg.seq);
             msg.ack();
           } catch (error) {
-            console.error('❌ Delivery failed:', error);
+            logger.error('Delivery failed', {
+              error: error instanceof Error ? error.message : String(error),
+            });
             if (deliveryAttempt + 1 >= MAX_RETRIES) {
-              console.error(`⚠️  Max retries reached, moving to DLQ`);
+              logger.warn('Max retries reached, moving to DLQ');
               await this.moveToDLQ(msg.data, error);
               msg.ack(); // Ack to remove from main queue
             } else {
@@ -79,13 +85,15 @@ export class InAppWorker {
         if (error instanceof Error && error.message.includes('timeout')) {
           continue;
         }
-        console.error('❌ Error fetching messages:', error);
+        logger.error('Error fetching messages', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
 
   async stop(): Promise<void> {
-    console.log('🛑 Stopping In-App Worker...');
+    logger.info('Stopping In-App Worker');
     this.running = false;
   }
 
@@ -93,9 +101,7 @@ export class InAppWorker {
     const startTime = Date.now();
     const notification: RenderedNotification = JSON.parse(new TextDecoder().decode(data));
 
-    console.log(
-      `📱 Delivering in-app notification ${notification.eventId} (attempt ${attempt}, seq: ${seq})`
-    );
+    logger.info('Delivering in-app notification', { eventId: notification.eventId, attempt, seq });
 
     // Store in database (in-app notifications are stored for user to view later)
     const deliveryId = nanoid();
@@ -132,10 +138,10 @@ export class InAppWorker {
       })
     );
 
-    const duration = Date.now() - startTime;
-    console.log(
-      `✅ In-app notification ${notification.eventId} stored and broadcasted (${duration}ms)`
-    );
+    const durationMs = Date.now() - startTime;
+    deliveriesTotal.inc({ channel: 'in_app', status: 'delivered' });
+    deliveryDurationSeconds.observe({ channel: 'in_app' }, durationMs / 1000);
+    logger.info('In-app notification delivered', { eventId: notification.eventId, durationMs });
   }
 
   private async moveToDLQ(data: Uint8Array, error: unknown): Promise<void> {
@@ -151,7 +157,8 @@ export class InAppWorker {
     };
 
     await this.js.publish(DLQ_SUBJECT, new TextEncoder().encode(JSON.stringify(dlqPayload)));
-    console.log(`📮 Moved event ${notification.eventId} to DLQ`);
+    deliveriesTotal.inc({ channel: 'in_app', status: 'failed' });
+    logger.warn('Event moved to DLQ', { eventId: notification.eventId });
   }
 }
 
@@ -170,7 +177,9 @@ if (require.main === module) {
   });
 
   worker.start().catch((err) => {
-    console.error('❌ In-app worker failed:', err);
+    logger.error('In-app worker failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
   });
 }

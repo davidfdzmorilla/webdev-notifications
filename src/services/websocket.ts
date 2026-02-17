@@ -50,7 +50,7 @@ export class WebSocketServer {
 
           // Store in Redis for distributed setup
           await this.redis.sadd(`ws:users:${userId}`, socket.id);
-          await this.redis.set(`ws:socket:${socket.id}`, userId, { EX: 86400 });
+          await this.redis.setex(`ws:socket:${socket.id}`, 86400, userId);
 
           socket.emit('auth:success', { userId, socketId: socket.id });
           console.log(`✅ User ${userId} authenticated (${socket.id})`);
@@ -127,15 +127,21 @@ export class WebSocketServer {
     const subscriber = getRedisClient().duplicate();
     await subscriber.connect();
 
-    await subscriber.subscribe('ws:notifications', (message) => {
+    await subscriber.subscribe('ws:notifications');
+
+    subscriber.on('message', (_channel: string, message: string) => {
       try {
-        const data = JSON.parse(message);
+        if (!message) return;
+        const data = JSON.parse(message) as { userId: string; notification: unknown };
         const { userId, notification } = data;
 
         // Send to user's room
         this.sendToUser(userId, 'notification:new', notification);
       } catch (error) {
-        console.error('Error processing notification broadcast:', error);
+        console.error(
+          'Error processing notification broadcast:',
+          error instanceof Error ? error.message : String(error)
+        );
       }
     });
 

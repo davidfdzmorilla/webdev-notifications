@@ -14,13 +14,14 @@ const updateTemplateSchema = z.object({
  * PATCH /api/admin/templates/:id
  * Update a notification template
  */
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const adminKey = request.headers.get('x-admin-key');
     if (!adminKey || adminKey !== process.env.ADMIN_KEY) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { id } = await params;
     const body = await request.json();
     const validation = updateTemplateSchema.safeParse(body);
 
@@ -37,7 +38,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         ...validation.data,
         updatedAt: new Date(),
       })
-      .where(eq(notificationTemplates.id, params.id))
+      .where(eq(notificationTemplates.id, id))
       .returning();
 
     if (!template) {
@@ -55,16 +56,20 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
  * DELETE /api/admin/templates/:id
  * Delete a notification template
  */
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
     const adminKey = request.headers.get('x-admin-key');
     if (!adminKey || adminKey !== process.env.ADMIN_KEY) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const { id } = await params;
     const [deleted] = await db
       .delete(notificationTemplates)
-      .where(eq(notificationTemplates.id, params.id))
+      .where(eq(notificationTemplates.id, id))
       .returning();
 
     if (!deleted) {

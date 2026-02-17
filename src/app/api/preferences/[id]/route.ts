@@ -14,12 +14,13 @@ const updatePreferenceSchema = z.object({
  * GET /api/preferences/:id
  * Get a single preference by ID
  */
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const [preference] = await db
       .select()
       .from(notificationPreferences)
-      .where(eq(notificationPreferences.id, params.id))
+      .where(eq(notificationPreferences.id, id))
       .limit(1);
 
     if (!preference) {
@@ -37,8 +38,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
  * PATCH /api/preferences/:id
  * Update a preference
  */
-export async function PATCH(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    const { id } = await params;
     const body = await request.json();
     const validation = updatePreferenceSchema.safeParse(body);
 
@@ -55,7 +57,7 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
         ...validation.data,
         updatedAt: new Date(),
       })
-      .where(eq(notificationPreferences.id, params.id))
+      .where(eq(notificationPreferences.id, id))
       .returning();
 
     if (!preference) {
@@ -73,11 +75,15 @@ export async function PATCH(request: NextRequest, { params }: { params: { id: st
  * DELETE /api/preferences/:id
  * Delete a preference
  */
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
   try {
+    const { id } = await params;
     const [deleted] = await db
       .delete(notificationPreferences)
-      .where(eq(notificationPreferences.id, params.id))
+      .where(eq(notificationPreferences.id, id))
       .returning();
 
     if (!deleted) {

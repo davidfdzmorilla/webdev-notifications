@@ -1,10 +1,14 @@
-import { JetStreamClient } from 'nats';
+import { JetStreamClient, RetentionPolicy, StorageType, AckPolicy } from 'nats';
 import { getJetStream, getJetStreamManager } from '../lib/nats';
 import { getRedisClient } from '../lib/redis';
 import { db } from '../lib/db';
 import { users } from '../lib/db/schema';
 import { eq } from 'drizzle-orm';
 import { notificationEventSchema, type NotificationEvent } from '../types';
+import { createLogger } from '../lib/logger';
+import { eventsReceivedTotal, eventsProcessedTotal, eventsFailedTotal } from '../lib/metrics';
+
+const logger = createLogger('ingestion-service');
 
 const EVENTS_SUBJECT = 'notifications.events';
 const ENRICHED_SUBJECT = 'notifications.enriched';
@@ -23,7 +27,7 @@ export class IngestionService {
   private running = false;
 
   async start(): Promise<void> {
-    console.log('🚀 Starting Ingestion Service...');
+    logger.info('Starting Ingestion Service');
 
     // Initialize NATS JetStream
     this.js = await getJetStream();
@@ -32,39 +36,39 @@ export class IngestionService {
     // Ensure stream exists
     try {
       await jsm.streams.info('notifications');
-      console.log('✅ Stream "notifications" exists');
+      logger.info('Stream "notifications" exists');
     } catch {
-      console.log('Creating stream "notifications"...');
+      logger.info('Creating stream "notifications"');
       await jsm.streams.add({
         name: 'notifications',
         subjects: ['notifications.>'],
-        retention: 'limits',
+        retention: RetentionPolicy.Limits,
         max_age: 86400_000_000_000, // 24 hours in nanoseconds
-        storage: 'file',
+        storage: StorageType.File,
       });
-      console.log('✅ Stream "notifications" created');
+      logger.info('Stream "notifications" created');
     }
 
     // Ensure consumer exists
     try {
       await jsm.consumers.info('notifications', 'ingestion-consumer');
-      console.log('✅ Consumer "ingestion-consumer" exists');
+      logger.info('Consumer "ingestion-consumer" exists');
     } catch {
-      console.log('Creating consumer "ingestion-consumer"...');
+      logger.info('Creating consumer "ingestion-consumer"');
       await jsm.consumers.add('notifications', {
         durable_name: 'ingestion-consumer',
-        ack_policy: 'explicit',
+        ack_policy: AckPolicy.Explicit,
         filter_subject: EVENTS_SUBJECT,
       });
-      console.log('✅ Consumer "ingestion-consumer" created');
+      logger.info('Consumer "ingestion-consumer" created');
     }
 
     // Subscribe to events using pull consumer
     const consumer = await this.js.consumers.get('notifications', 'ingestion-consumer');
     this.running = true;
 
-    console.log(`✅ Subscribed to ${EVENTS_SUBJECT}`);
-    console.log('🎧 Listening for events...');
+    logger.info('Subscribed to events subject', { subject: EVENTS_SUBJECT });
+    logger.info('Listening for events');
 
     // Process messages
     while (this.running) {
@@ -75,7 +79,10 @@ export class IngestionService {
             await this.processEvent(msg.data, msg.seq);
             msg.ack();
           } catch (error) {
-            console.error('❌ Error processing event:', error);
+            logger.error('Error processing event', {
+              seq: msg.seq,
+              error: error instanceof Error ? error.message : String(error),
+            });
             msg.nak();
           }
         }
@@ -84,13 +91,15 @@ export class IngestionService {
           // No messages available, continue
           continue;
         }
-        console.error('❌ Error fetching messages:', error);
+        logger.error('Error fetching messages', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
 
   async stop(): Promise<void> {
-    console.log('🛑 Stopping Ingestion Service...');
+    logger.info('Stopping Ingestion Service');
     this.running = false;
   }
 
@@ -102,17 +111,22 @@ export class IngestionService {
     const validationResult = notificationEventSchema.safeParse(rawEvent);
 
     if (!validationResult.success) {
-      console.error('❌ Invalid event schema:', validationResult.error);
+      logger.error('Invalid event schema', {
+        seq,
+        errors: validationResult.error.flatten(),
+      });
+      eventsFailedTotal.inc({ event_type: rawEvent?.eventType || 'unknown', reason: 'validation' });
       throw new Error('Invalid event schema');
     }
 
     const event = validationResult.data;
-    console.log(`📩 Received event ${event.eventId} (seq: ${seq})`);
+    eventsReceivedTotal.inc({ event_type: event.eventType });
+    logger.info('Received event', { eventId: event.eventId, seq, eventType: event.eventType });
 
     // Check for duplicates
     const isDuplicate = await this.checkDuplicate(event.eventId);
     if (isDuplicate) {
-      console.log(`⚠️  Duplicate event ${event.eventId}, skipping`);
+      logger.warn('Duplicate event detected, skipping', { eventId: event.eventId });
       return;
     }
 
@@ -123,7 +137,11 @@ export class IngestionService {
     await this.publishEnrichedEvent(enrichedEvent);
 
     const duration = Date.now() - startTime;
-    console.log(`✅ Processed event ${event.eventId} in ${duration}ms`);
+    eventsProcessedTotal.inc({ event_type: event.eventType });
+    logger.info('Event processed successfully', {
+      eventId: event.eventId,
+      durationMs: duration,
+    });
   }
 
   private async checkDuplicate(eventId: string): Promise<boolean> {
@@ -144,7 +162,7 @@ export class IngestionService {
     const [user] = await db.select().from(users).where(eq(users.id, event.userId)).limit(1);
 
     if (!user) {
-      console.warn(`⚠️  User ${event.userId} not found, proceeding without enrichment`);
+      logger.warn('User not found, proceeding without enrichment', { userId: event.userId });
       return {
         ...event,
         enrichedAt: new Date().toISOString(),
@@ -167,7 +185,10 @@ export class IngestionService {
 
     const data = new TextEncoder().encode(JSON.stringify(event));
     await this.js.publish(ENRICHED_SUBJECT, data);
-    console.log(`📤 Published enriched event ${event.eventId} to ${ENRICHED_SUBJECT}`);
+    logger.debug('Published enriched event', {
+      eventId: event.eventId,
+      subject: ENRICHED_SUBJECT,
+    });
   }
 }
 
@@ -186,7 +207,9 @@ if (require.main === module) {
   });
 
   service.start().catch((err) => {
-    console.error('❌ Ingestion service failed:', err);
+    logger.error('Ingestion service failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
   });
 }

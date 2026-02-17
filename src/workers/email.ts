@@ -1,8 +1,12 @@
-import { JetStreamClient } from 'nats';
+import { JetStreamClient, AckPolicy } from 'nats';
 import { getJetStream, getJetStreamManager } from '../lib/nats';
 import { db } from '../lib/db';
 import { notificationDeliveries } from '../lib/db/schema';
 import { nanoid } from 'nanoid';
+import { createLogger } from '../lib/logger';
+import { deliveriesTotal, deliveryDurationSeconds } from '../lib/metrics';
+
+const logger = createLogger('worker:email');
 
 const DELIVERY_SUBJECT = 'notifications.delivery.email';
 const DLQ_SUBJECT = 'notifications.dlq';
@@ -26,12 +30,11 @@ interface RenderedNotification {
 export class EmailWorker {
   private js: JetStreamClient | null = null;
   private running = false;
-  private failureRate = 0; // Circuit breaker: track failure rate
   private consecutiveFailures = 0;
   private circuitOpen = false;
 
   async start(): Promise<void> {
-    console.log('🚀 Starting Email Worker...');
+    logger.info('Starting Email Worker');
 
     this.js = await getJetStream();
     const jsm = await getJetStreamManager();
@@ -39,35 +42,37 @@ export class EmailWorker {
     const consumerName = 'email-worker-consumer';
     try {
       await jsm.consumers.info('notifications', consumerName);
-      console.log(`✅ Consumer "${consumerName}" exists`);
+      logger.info('Consumer exists', { consumerName });
     } catch {
-      console.log(`Creating consumer "${consumerName}"...`);
+      logger.info('Creating consumer', { consumerName });
       await jsm.consumers.add('notifications', {
         durable_name: consumerName,
-        ack_policy: 'explicit',
+        ack_policy: AckPolicy.Explicit,
         filter_subject: DELIVERY_SUBJECT,
         max_deliver: MAX_RETRIES,
       });
-      console.log(`✅ Consumer "${consumerName}" created`);
+      logger.info('Consumer created', { consumerName });
     }
 
     const consumer = await this.js.consumers.get('notifications', consumerName);
     this.running = true;
 
-    console.log(`✅ Subscribed to ${DELIVERY_SUBJECT}`);
-    console.log('📧 Delivering email notifications...');
+    logger.info('Subscribed to delivery subject', { subject: DELIVERY_SUBJECT });
+    logger.info('Delivering email notifications');
 
     while (this.running) {
       // Circuit breaker: open if too many failures
       if (this.consecutiveFailures >= 5) {
         if (!this.circuitOpen) {
-          console.warn('⚠️  Circuit breaker OPEN - pausing email delivery');
+          logger.warn('Circuit breaker OPEN - pausing email delivery', {
+            consecutiveFailures: this.consecutiveFailures,
+          });
           this.circuitOpen = true;
         }
-        await this.sleep(10000); // Wait 10s before trying again
-        this.consecutiveFailures = 0; // Reset and try
+        await this.sleep(10000);
+        this.consecutiveFailures = 0;
         this.circuitOpen = false;
-        console.log('🔄 Circuit breaker CLOSED - resuming');
+        logger.info('Circuit breaker CLOSED - resuming');
       }
 
       try {
@@ -76,20 +81,22 @@ export class EmailWorker {
           const deliveryAttempt = msg.info?.redeliveryCount || 0;
           try {
             if (deliveryAttempt > 0) {
-              // Exponential backoff
               const delay = RETRY_DELAYS[Math.min(deliveryAttempt - 1, RETRY_DELAYS.length - 1)];
-              console.log(`⏳ Retry delay: ${delay}ms`);
+              logger.debug('Retry backoff delay', { delayMs: delay, attempt: deliveryAttempt });
               await this.sleep(delay);
             }
 
             await this.deliver(msg.data, deliveryAttempt + 1, msg.seq);
             msg.ack();
-            this.consecutiveFailures = 0; // Reset on success
+            this.consecutiveFailures = 0;
           } catch (error) {
             this.consecutiveFailures++;
-            console.error('❌ Email delivery failed:', error);
+            logger.error('Email delivery failed', {
+              error: error instanceof Error ? error.message : String(error),
+              attempt: deliveryAttempt + 1,
+            });
             if (deliveryAttempt + 1 >= MAX_RETRIES) {
-              console.error(`⚠️  Max retries reached, moving to DLQ`);
+              logger.warn('Max retries reached, moving to DLQ');
               await this.moveToDLQ(msg.data, error);
               msg.ack();
             } else {
@@ -101,13 +108,15 @@ export class EmailWorker {
         if (error instanceof Error && error.message.includes('timeout')) {
           continue;
         }
-        console.error('❌ Error fetching messages:', error);
+        logger.error('Error fetching messages', {
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
   }
 
   async stop(): Promise<void> {
-    console.log('🛑 Stopping Email Worker...');
+    logger.info('Stopping Email Worker');
     this.running = false;
   }
 
@@ -115,10 +124,17 @@ export class EmailWorker {
     const startTime = Date.now();
     const notification: RenderedNotification = JSON.parse(new TextDecoder().decode(data));
 
-    console.log(`📧 Sending email to ${notification.userEmail} (attempt ${attempt}, seq: ${seq})`);
+    logger.info('Sending email', {
+      to: notification.userEmail,
+      attempt,
+      seq,
+      eventId: notification.eventId,
+    });
 
-    // Mock email sending (replace with real SMTP/SendGrid in production)
+    // Mock email sending
     await this.sendEmail(notification);
+
+    const durationMs = Date.now() - startTime;
 
     // Track delivery
     const deliveryId = nanoid();
@@ -137,13 +153,17 @@ export class EmailWorker {
       },
     });
 
-    const duration = Date.now() - startTime;
-    console.log(`✅ Email sent to ${notification.userEmail} (${duration}ms)`);
+    deliveriesTotal.inc({ channel: 'email', status: 'delivered' });
+    deliveryDurationSeconds.observe({ channel: 'email' }, durationMs / 1000);
+
+    logger.info('Email sent successfully', {
+      to: notification.userEmail,
+      durationMs,
+      eventId: notification.eventId,
+    });
   }
 
   private async sendEmail(notification: RenderedNotification): Promise<void> {
-    // Mock SMTP send (replace with real implementation)
-    // In production: use nodemailer or SendGrid API
     if (!notification.userEmail) {
       throw new Error('Missing email address');
     }
@@ -156,9 +176,11 @@ export class EmailWorker {
       throw new Error('SMTP connection timeout');
     }
 
-    console.log(`  → To: ${notification.userEmail}`);
-    console.log(`  → Subject: ${notification.subject || '(no subject)'}`);
-    console.log(`  → Body: ${notification.body.substring(0, 50)}...`);
+    logger.debug('Email payload', {
+      to: notification.userEmail,
+      subject: notification.subject,
+      bodyPreview: notification.body.substring(0, 50),
+    });
   }
 
   private async moveToDLQ(data: Uint8Array, error: unknown): Promise<void> {
@@ -174,7 +196,13 @@ export class EmailWorker {
     };
 
     await this.js.publish(DLQ_SUBJECT, new TextEncoder().encode(JSON.stringify(dlqPayload)));
-    console.log(`📮 Moved event ${notification.eventId} to DLQ`);
+
+    deliveriesTotal.inc({ channel: 'email', status: 'failed' });
+
+    logger.warn('Event moved to DLQ', {
+      eventId: notification.eventId,
+      error: dlqPayload.error,
+    });
 
     // Track failed delivery
     const deliveryId = nanoid();
@@ -213,7 +241,9 @@ if (require.main === module) {
   });
 
   worker.start().catch((err) => {
-    console.error('❌ Email worker failed:', err);
+    logger.error('Email worker failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
     process.exit(1);
   });
 }

@@ -44,7 +44,7 @@ export default function TestEventsPage() {
         }),
       });
 
-      const data = await res.json();
+      const data = (await res.json()) as Record<string, unknown>;
 
       if (res.ok) {
         setResult({ success: true, eventId: data.eventId });
